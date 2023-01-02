@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 
 #*******************************************************************************
-# Copyright (C) 2020-2022 Paul Caprioli
+# Copyright (C) 2020-2023 Paul Caprioli
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to
@@ -55,16 +55,16 @@ def WtoFP16(w):
     return e
 
 def BF16toW(f):
-    # User is expected to enter a value representable as a "brain float 16".
-    # If not, do something reasonable.
-    # First convert to FP32 and ignore the consequences of double rounding.
+    # User is expected to enter a value representable as a "brain float 16",
+    # i.e. the lower 16 bits should be zero.  If not, do something reasonable.
     packed = struct.pack('>f', f)
-    dw, = struct.unpack('>I', packed)
+    dw, = struct.unpack('>I', packed)  # Bits after converting to FP32
     w = dw >> 16
-    if (dw & 0x7FFFFFFF) > 0x7F800000:  # NaN (ensure bit 6 is set)
-        w |= (0x1 << 6)
-    else:                               # RNE
-        dw += 0x7FFF + (w & 0x1)
+    if (dw & 0x7FFFFFFF) > 0x7F800000:  # NaN
+        if (w & 0x7F) == 0:
+            w |= (0x1 << 6)  # Set bit 6 to make the result NaN
+    else:
+        dw += 0x7FFF + (w & 0x1)  # RNE
         w = dw >> 16
     return w
 
@@ -74,9 +74,31 @@ def WtoBF16(w):
     f, = struct.unpack('>f', packed)
     return f
 
+def BF8toB(e):
+    # User is expected to enter a value representable as a "brain float 8",
+    # i.e. the lower 8 bits should be zero.  If not, do something reasonable.
+    packed = struct.pack('>e', e)
+    w, = struct.unpack('>H', packed)  # Bits after converting to FP16
+    b = w >> 8
+    if (w & 0x7FFF) > 0x7C00:  # NaN
+        if (b & 0x3) == 0:
+            b |= (0x1 << 1)  # Set bit 1 to make the result NaN
+    else:
+        w += 0x7F + (b & 0x1)  # RNE
+        b = w >> 8
+    return b
+
+def BtoBF8(b):
+    w = b << 8
+    packed = struct.pack('>H', w)
+    e, = struct.unpack('>e', packed)
+    return e
+
 def decodeString(numberString, numberType):
     numberString = re.sub('_', '', numberString)
     if re.match("\s*epsilon", numberString, re.I):
+        if numberType == "bf8":
+            valueInt = 0x34
         if numberType == "bf16":
             valueInt = 0x3C00
         if numberType == "fp16":
@@ -93,6 +115,8 @@ def decodeString(numberString, numberType):
                 inputValue = float(numberString)
         except:
             return (None, None)
+        if numberType == "bf8":
+            valueInt = BF8toB(inputValue)
         if numberType == "bf16":
             valueInt = BF16toW(inputValue)
         if numberType == "fp16":
@@ -106,6 +130,10 @@ def decodeString(numberString, numberType):
             valueInt = int(numberString, 0)
         except:
             return (None, None)
+    if numberType == "bf8":
+        if valueInt < 0 or valueInt > 0xFF:
+            return (None, None)
+        return (valueInt, BtoBF8(valueInt))
     if numberType == "bf16":
         if valueInt < 0 or valueInt > 0xFFFF:
             return (None, None)
@@ -124,7 +152,7 @@ def decodeString(numberString, numberType):
         return (valueInt, QWtoFP64(valueInt))
 
 def getHexValueString(valueFloat, numberType):
-    if numberType == "bf16":
+    if numberType == "bf8" or numberType == "bf16":
         return re.sub('00000000000p', 'p', valueFloat.hex())
     if numberType == "fp16":
         return re.sub('0000000000p', 'p', valueFloat.hex())
@@ -134,6 +162,9 @@ def getHexValueString(valueFloat, numberType):
 
 def printKey(prefix, numberType):
     spaces = re.sub('\S', ' ', prefix)
+    if numberType == "bf8":
+        print(prefix, "7 65432 10")
+        print(spaces, "S -E5-- F2")
     if numberType == "fp16":
         print(prefix, "1       0")
         print(spaces, "5 43210 9876543210")
@@ -155,6 +186,8 @@ def printKey(prefix, numberType):
                       "------------------------F52-------------------------")
 
 def crack(valInt, numberType):
+    if numberType == "bf8":
+        return (valInt >> 7,  (valInt >>  2) & 0x1F,  valInt & 0x3)
     if numberType == "fp16":
         return (valInt >> 15, (valInt >> 10) & 0x1F,  valInt & 0x3FF)
     if numberType == "bf16":
@@ -172,6 +205,9 @@ def toBitString(field, bitlength):
     return ''.join(resultArray)
 
 def getBinaryString(sign, exp, frac, numberType):
+    if numberType == "bf8":
+        expString = toBitString(exp, 5)
+        fracString = toBitString(frac, 2)
     if numberType == "fp16":
         expString = toBitString(exp, 5)
         fracString = toBitString(frac, 10)
@@ -192,53 +228,44 @@ def getSignInfo(sign):
     return "Positive"
 
 def getExponentInfo(exp, numberType):
-    if numberType == "fp16":
+    if numberType == "bf8" or numberType == "fp16":
         return ''.join([str(exp), " - 15 = ", str(exp - 15)])
-    if numberType == "bf16":
-        return ''.join([str(exp), " - 127 = ", str(exp - 127)])
-    if numberType == "fp32":
+    if numberType == "bf16" or numberType == "fp32":
         return ''.join([str(exp), " - 127 = ", str(exp - 127)])
     if numberType == "fp64":
         return ''.join([str(exp), " - 1023 = ", str(exp - 1023)])
 
 def printHelp():
-    print("\nUsage: ", sys.argv[0], "[--bf16 | --fp16 | --fp32 | --fp64] "
-          "number", file=sys.stderr)
-    print("\nNotes: 1. If number is a non-negative integer (decimal, hex, or")
-    print("          binary) it is taken as the bit pattern representation of");
-    print("          the floating point value.");
-    print("       2. If number contains a decimal (or binary) point, it is");
-    print("          taken as the desired value itself.");
-    print("       3. Underscores can be inserted in number for readability.");
-    print("       4. The special floating point values epsilon, inf, and nan");
-    print("          are also supported.  Epsilon is defined as the smallest");
-    print("          value of x such that 1.0 + x > 1.0.");
-    print("\nExamples:", sys.argv[0], "--fp16 0x4200",      file=sys.stderr)
-    print("         ",   sys.argv[0], "--fp16 0b0_10000_1000000000",
-                                                            file=sys.stderr)
-    print("         ",   sys.argv[0], "--fp32 0x4040_0000", file=sys.stderr)
-    print("         ",   sys.argv[0], "--fp32 0x1.8p1",     file=sys.stderr)
-    print("         ",   sys.argv[0], "--fp32 3.0",         file=sys.stderr)
-    print("         ",   sys.argv[0], "--fp64 epsilon",     file=sys.stderr)
-    print("         ",   sys.argv[0], "--fp64 inf",         file=sys.stderr)
-    print("         ",   sys.argv[0], "--fp64 nan",         file=sys.stderr)
-    print("",                                               file=sys.stderr)
+    print("\nUsage: ", sys.argv[0],
+          "[--bf8 | --bf16 | --fp16 | --fp32 | --fp64] number\n",
+                                                          file=sys.stderr)
+    print("""Notes: 1. If number is a non-negative integer (decimal, hex, or
+          binary) it is taken as the bit pattern representation of
+          the floating point value.
+       2. If number contains a decimal (or binary) point, it is
+          taken as the desired value itself.
+       3. Underscores can be inserted in number for readability.
+       4. The special floating point values epsilon, inf, and nan
+          are also supported.  Epsilon is defined as the smallest
+          value of x such that 1.0 + x > 1.0.\n""",       file=sys.stderr)
+    print("Examples:", sys.argv[0], "--fp16 0x4200",      file=sys.stderr)
+    print("         ", sys.argv[0], "--fp16 0b0_10000_1000000000",
+                                                          file=sys.stderr)
+    print("         ", sys.argv[0], "--fp32 0x4040_0000", file=sys.stderr)
+    print("         ", sys.argv[0], "--fp32 0x1.8p1",     file=sys.stderr)
+    print("         ", sys.argv[0], "--fp32 3.0",         file=sys.stderr)
+    print("         ", sys.argv[0], "--fp64 epsilon",     file=sys.stderr)
+    print("         ", sys.argv[0], "--fp64 inf",         file=sys.stderr)
+    print("         ", sys.argv[0], "--fp64 nan\n",       file=sys.stderr)
 
 def main():
-    numberType = ""
     if len(sys.argv) <= 1:
         printHelp()
         return
     numberType = "fp64"
     for arg in sys.argv[1:-1]:
-        if arg == "--fp16":
-            numberType = "fp16"
-        elif arg == "--bf16":
-            numberType = "bf16"
-        elif arg == "--fp32":
-            numberType = "fp32"
-        elif arg == "--fp64":
-            numberType = "fp64"
+        if arg in ["--bf8", "--bf16", "--fp16", "--fp32", "--fp64"]:
+            numberType = arg[2:]
         else:
             print("Invalid argument:", arg, file=sys.stderr)
             return

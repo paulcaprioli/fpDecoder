@@ -1,18 +1,21 @@
 # fpDecoder
 Decodes floating point constants
 
+Note that everything needed is in one file, `fpDecoder.py`, so it is not
+necessary to clone the git repository to use the decoder.
+
 ## Usage
 
-Usage: `fpDecoder.py [--bf16 | --fp16 | --fp32 | --fp64] number`
+Usage: `fpDecoder.py [--bf8 | --bf16 | --fp16 | --fp32 | --fp64] number`
 
 Notes:
-1. If number is a non-negative integer (decimal, hex, or
+1. If `number` is a non-negative integer (decimal, hex, or
    binary) it is taken as the bit pattern representation of
    the floating point value.
-2. If number contains a decimal (or binary) point, it is
+2. If `number` contains a decimal (or binary) point, it is
    taken as the desired value itself.
-3. Underscores can be inserted in number for readability.
-4. The special floating point values epsilon, inf, and nan
+3. Underscores can be inserted in `number` for readability.
+4. The special floating point values `epsilon`, `inf`, and `nan`
    are also supported.  Epsilon is defined as the smallest
    value of x such that 1.0 + x > 1.0.
 
